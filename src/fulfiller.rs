@@ -10,6 +10,7 @@ use crate::types::{BankId, Edge, EdgeType, EntryId, Temperature};
 
 /// Maps per-interpreter bank_slot (u8) to global BankId.
 /// The kernel initializes this per-region during boot.
+#[derive(Clone)]
 pub struct BankSlotMap {
     slots: [Option<BankId>; 256],
 }
