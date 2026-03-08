@@ -259,6 +259,9 @@ pub struct BankConfig {
     pub vector_width: u16,
     /// Maximum edges per entry. Default: 32.
     pub max_edges_per_entry: u16,
+    /// Index type for similarity search. Default: IVF (k=64, nprobe=8).
+    #[serde(skip)]
+    pub index_type: crate::ivf::IndexType,
 }
 
 impl BankConfig {
@@ -277,6 +280,7 @@ impl Default for BankConfig {
             max_entries: 4096,
             vector_width: 64,
             max_edges_per_entry: 32,
+            index_type: crate::ivf::IndexType::default(),
         }
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "databank-rs"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 authors = ["Magnus Trent <magnus@blackfall.dev>"]
 license = "MIT"
@@ -14,13 +14,13 @@ default = []
 ternsig = ["dep:ternsig"]
 
 [dependencies]
-ternary-signal = "0.1"
+ternary-signal = { path = "../ternary-signal" }
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 log = "0.4"
-ternsig = { version = "1.4", optional = true }
+ternsig = { path = "../ternsig", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
-ternsig = "1.4"
+ternsig = { path = "../ternsig" }

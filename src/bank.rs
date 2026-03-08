@@ -1,17 +1,19 @@
 use std::collections::HashMap;
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::entry::BankEntry;
 use crate::error::{DataBankError, Result};
-use crate::index::{BruteForceIndex, VectorIndex};
+use crate::index::VectorIndex;
+use crate::ivf::{IndexType, IvfIndex};
 use crate::similarity::QueryResult;
 use crate::types::{BankConfig, BankId, BankRef, Edge, EdgeType, EntryId, Temperature};
 
 /// A single databank — one region's representational memory.
 ///
 /// Each brain region owns one or more DataBanks, each storing signal-vector
-/// fragments of distributed concepts. Entries are fixed-width signal vectors
-/// with typed edges to entries in other banks.
+/// fragments of distributed concepts. Entries are fixed-width PackedSignal
+/// vectors (1 byte per dimension, full s = p × m × k equation) with typed
+/// edges to entries in other banks.
 ///
 /// The bank manages its own persistence cadence (mutations + ticks since
 /// last flush). The kernel calls `should_persist()` each tick and flushes
@@ -27,8 +29,8 @@ pub struct DataBank {
     entries: HashMap<EntryId, BankEntry>,
     /// Next sequence counter for EntryId generation.
     next_seq: u32,
-    /// Vector similarity index (brute-force for 0.1).
-    vector_index: BruteForceIndex,
+    /// Vector similarity index.
+    vector_index: Box<dyn VectorIndex>,
     /// Reverse edge index: "who points to me?"
     reverse_edges: HashMap<EntryId, Vec<(BankRef, EdgeType)>>,
     /// Mutations since last persistence flush.
@@ -41,14 +43,18 @@ pub struct DataBank {
 
 impl DataBank {
     /// Create a new empty bank with the given identity and configuration.
+    ///
+    /// Uses IVF indexing by default (k=64, nprobe=8). Override via
+    /// `BankConfig::index_type` for specific needs.
     pub fn new(id: BankId, name: String, config: BankConfig) -> Self {
+        let vector_index = create_index(&config.index_type);
         Self {
             id,
             config,
             name,
             entries: HashMap::new(),
             next_seq: 0,
-            vector_index: BruteForceIndex,
+            vector_index,
             reverse_edges: HashMap::new(),
             mutations_since_persist: 0,
             last_persist_tick: 0,
@@ -62,7 +68,7 @@ impl DataBank {
     /// If the bank is at capacity, the lowest-scoring entry is evicted first.
     pub fn insert(
         &mut self,
-        vector: Vec<Signal>,
+        vector: Vec<PackedSignal>,
         temperature: Temperature,
         tick: u64,
     ) -> Result<EntryId> {
@@ -121,10 +127,10 @@ impl DataBank {
 
     /// Query the bank for entries most similar to the given vector.
     ///
-    /// Uses sparse cosine similarity — only non-zero query dimensions
-    /// participate. This IS pattern completion: a partial cue activates
-    /// the full stored patterns that best match.
-    pub fn query_sparse(&self, query: &[Signal], top_k: usize) -> Vec<QueryResult> {
+    /// Uses sparse cosine similarity with the full s = p × m × k equation.
+    /// Only non-zero query dimensions participate. This IS pattern completion:
+    /// a partial cue activates the full stored patterns that best match.
+    pub fn query_sparse(&self, query: &[PackedSignal], top_k: usize) -> Vec<QueryResult> {
         self.vector_index.query(query, &self.entries, top_k)
     }
 
@@ -259,20 +265,20 @@ impl DataBank {
         mutations_since_persist: u32,
         last_persist_tick: u64,
     ) -> Self {
-        let mut bank = Self {
+        let mut vector_index = create_index(&config.index_type);
+        vector_index.rebuild(&entries);
+        Self {
             id,
             config,
             name,
             entries,
             next_seq,
-            vector_index: BruteForceIndex,
+            vector_index,
             reverse_edges,
             mutations_since_persist,
             last_persist_tick,
             dirty: false,
-        };
-        bank.vector_index.rebuild(&bank.entries);
-        bank
+        }
     }
 
     /// Promote an entry's temperature. Returns Ok(true) if promoted.
@@ -377,6 +383,14 @@ impl DataBank {
     }
 }
 
+/// Create a VectorIndex from the config's IndexType.
+fn create_index(index_type: &IndexType) -> Box<dyn VectorIndex> {
+    match index_type {
+        IndexType::BruteForce => Box::new(crate::index::BruteForceIndex),
+        IndexType::Ivf { k, nprobe } => Box::new(IvfIndex::new(*k, *nprobe)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -390,9 +404,9 @@ mod tests {
         }
     }
 
-    fn make_vector(width: u16) -> Vec<Signal> {
+    fn make_vector(width: u16) -> Vec<PackedSignal> {
         (0..width)
-            .map(|i| Signal::new(1, (i % 255) as u8 + 1))
+            .map(|i| PackedSignal::pack(1, (i % 255) as u8 + 1, 1))
             .collect()
     }
 

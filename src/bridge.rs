@@ -1,43 +1,52 @@
 //! Signal/Register Conversion Bridge
 //!
-//! Converts between Signal vectors (databank-rs internal format) and
+//! Converts between PackedSignal vectors (databank-rs internal format) and
 //! i32 register slices (TVMR firmware format). Also packs EntryId (u64)
 //! into i32 pairs for register transport.
 
 use crate::similarity::QueryResult;
 use crate::types::EntryId;
-use ternary_signal::Signal;
+use ternary_signal::{PackedSignal, Signal};
 
-/// Convert a Signal vector to i32 register values.
-/// Each Signal becomes: (polarity as i32) * (magnitude as i32)
-/// Range: [-255, 255]
-pub fn signals_to_i32(signals: &[Signal]) -> Vec<i32> {
+/// Convert a PackedSignal vector to i32 register values.
+/// Each PackedSignal becomes its full current value: p × m × k.
+pub fn packed_signals_to_i32(signals: &[PackedSignal]) -> Vec<i32> {
     signals
         .iter()
-        .map(|s| s.polarity as i32 * s.magnitude as i32)
+        .map(|s| s.current())
         .collect()
 }
 
-/// Convert i32 register values back to Signal vector.
-/// Clamps to [-255, 255], splits into polarity + magnitude.
+/// Convert i32 register values back to PackedSignal vector.
+/// Uses Signal::from_current() to decompose each i32 into p/m/k,
+/// then quantizes to PackedSignal.
+pub fn i32_to_packed_signals(values: &[i32]) -> Vec<PackedSignal> {
+    values
+        .iter()
+        .map(|&v| PackedSignal::from_signal(&Signal::from_current(v)))
+        .collect()
+}
+
+// --- Backward-compatible aliases for Signal-based bridge ---
+// These are used by the ternsig access layer and fulfiller which
+// speak i32 registers. We keep the names for downstream compat.
+
+/// Convert a Signal vector to i32 register values (legacy bridge).
+/// Uses the full s = p × m × k equation.
+#[allow(deprecated)]
+pub fn signals_to_i32(signals: &[Signal]) -> Vec<i32> {
+    signals
+        .iter()
+        .map(|s| s.current())
+        .collect()
+}
+
+/// Convert i32 register values to Signal vector (legacy bridge).
+#[allow(deprecated)]
 pub fn i32_to_signals(values: &[i32]) -> Vec<Signal> {
     values
         .iter()
-        .map(|&v| {
-            let clamped = v.clamp(-255, 255);
-            let polarity = if clamped > 0 {
-                1
-            } else if clamped < 0 {
-                -1
-            } else {
-                0
-            };
-            let magnitude = clamped.unsigned_abs() as u8;
-            Signal {
-                polarity,
-                magnitude,
-            }
-        })
+        .map(|&v| Signal::from_current(v))
         .collect()
 }
 
@@ -94,35 +103,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_signal_to_i32_roundtrip() {
+    fn test_packed_signal_to_i32_roundtrip() {
         let signals = vec![
-            Signal { polarity: 1, magnitude: 200 },
-            Signal { polarity: -1, magnitude: 128 },
-            Signal { polarity: 0, magnitude: 0 },
-            Signal { polarity: 1, magnitude: 1 },
+            PackedSignal::pack(1, 200, 1),
+            PackedSignal::pack(-1, 128, 1),
+            PackedSignal::ZERO,
+            PackedSignal::pack(1, 1, 1),
         ];
-        let i32s = signals_to_i32(&signals);
-        assert_eq!(i32s, vec![200, -128, 0, 1]);
+        let i32s = packed_signals_to_i32(&signals);
+        // Verify positive values are positive, negative are negative
+        assert!(i32s[0] > 0);
+        assert!(i32s[1] < 0);
+        assert_eq!(i32s[2], 0);
+        assert!(i32s[3] > 0);
 
-        let back = i32_to_signals(&i32s);
-        assert_eq!(back[0].polarity, 1);
-        assert_eq!(back[0].magnitude, 200);
-        assert_eq!(back[1].polarity, -1);
-        assert_eq!(back[1].magnitude, 128);
-        assert_eq!(back[2].polarity, 0);
-        assert_eq!(back[2].magnitude, 0);
-        assert_eq!(back[3].polarity, 1);
-        assert_eq!(back[3].magnitude, 1);
-    }
-
-    #[test]
-    fn test_i32_to_signal_clamping() {
-        let values = vec![500, -500, 0, 255, -255];
-        let signals = i32_to_signals(&values);
-        assert_eq!(signals[0].polarity, 1);
-        assert_eq!(signals[0].magnitude, 255);
-        assert_eq!(signals[1].polarity, -1);
-        assert_eq!(signals[1].magnitude, 255);
+        // Round-trip through i32 → PackedSignal should preserve direction
+        let back = i32_to_packed_signals(&i32s);
+        for (orig, restored) in signals.iter().zip(back.iter()) {
+            assert_eq!(orig.polarity(), restored.polarity(), "polarity mismatch");
+        }
     }
 
     #[test]

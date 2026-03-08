@@ -1,18 +1,14 @@
 use std::collections::HashMap;
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::entry::BankEntry;
 use crate::similarity::{sparse_cosine_similarity, QueryResult};
 use crate::types::EntryId;
 
 /// Vector similarity index for fast recall.
-///
-/// For 0.1 this is a brute-force linear scan. Future versions may add
-/// IVF (inverted file index) or LSH (locality-sensitive hashing) for
-/// sub-linear query time on large banks.
 pub trait VectorIndex: Send + Sync {
     /// Record a new entry in the index.
-    fn insert(&mut self, id: EntryId, vector: &[Signal]);
+    fn insert(&mut self, id: EntryId, vector: &[PackedSignal]);
 
     /// Remove an entry from the index.
     fn remove(&mut self, id: EntryId);
@@ -20,7 +16,7 @@ pub trait VectorIndex: Send + Sync {
     /// Query the index for the top_k most similar entries to the query vector.
     fn query(
         &self,
-        query: &[Signal],
+        query: &[PackedSignal],
         entries: &HashMap<EntryId, BankEntry>,
         top_k: usize,
     ) -> Vec<QueryResult>;
@@ -31,14 +27,14 @@ pub trait VectorIndex: Send + Sync {
 
 /// Brute-force linear scan index. O(n) per query.
 ///
-/// Sufficient for 0.1 where banks hold up to ~4096 entries.
+/// Sufficient for small banks where linear scan is acceptable.
 /// At 64-dimensional vectors with integer arithmetic, a full scan
 /// of 4096 entries takes <1ms on modern hardware.
 #[derive(Debug, Default)]
 pub struct BruteForceIndex;
 
 impl VectorIndex for BruteForceIndex {
-    fn insert(&mut self, _id: EntryId, _vector: &[Signal]) {
+    fn insert(&mut self, _id: EntryId, _vector: &[PackedSignal]) {
         // No-op: brute force scans the entry map directly.
     }
 
@@ -48,7 +44,7 @@ impl VectorIndex for BruteForceIndex {
 
     fn query(
         &self,
-        query: &[Signal],
+        query: &[PackedSignal],
         entries: &HashMap<EntryId, BankEntry>,
         top_k: usize,
     ) -> Vec<QueryResult> {
@@ -80,11 +76,11 @@ mod tests {
     use super::*;
     use crate::types::{BankId, Temperature};
 
-    fn sig(polarity: i8, magnitude: u8) -> Signal {
-        Signal::new(polarity, magnitude)
+    fn sig(polarity: i8, magnitude: u8) -> PackedSignal {
+        PackedSignal::pack(polarity, magnitude, 1)
     }
 
-    fn make_entry(id: u64, vector: Vec<Signal>) -> (EntryId, BankEntry) {
+    fn make_entry(id: u64, vector: Vec<PackedSignal>) -> (EntryId, BankEntry) {
         let eid = EntryId::from_raw(id);
         let entry = BankEntry::new(eid, vector, BankId::from_raw(1), Temperature::Hot, 0);
         (eid, entry)

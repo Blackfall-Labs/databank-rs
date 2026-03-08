@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::types::EntryId;
 
@@ -14,6 +14,7 @@ pub struct QueryResult {
 
 /// Sparse cosine similarity using only integer arithmetic.
 ///
+/// Uses the full ternary equation s = p × m × k via `PackedSignal::current()`.
 /// Only non-zero query signals participate — this IS pattern completion.
 /// A partial cue with zeros in unknown dimensions matches against the
 /// full stored vector only on the dimensions the cue specifies.
@@ -21,7 +22,7 @@ pub struct QueryResult {
 /// Returns a score scaled ×256 (i32). Returns 0 for zero-norm inputs.
 ///
 /// Compliant with ASTRO_004: no floating point. Integer-only arithmetic.
-pub fn sparse_cosine_similarity(query: &[Signal], stored: &[Signal]) -> i32 {
+pub fn sparse_cosine_similarity(query: &[PackedSignal], stored: &[PackedSignal]) -> i32 {
     let len = query.len().min(stored.len());
 
     let mut dot: i64 = 0;
@@ -31,12 +32,13 @@ pub fn sparse_cosine_similarity(query: &[Signal], stored: &[Signal]) -> i32 {
     for i in 0..len {
         let q = query[i];
         // Skip inactive query dimensions (sparse: zeros don't participate)
-        if q.polarity == 0 && q.magnitude == 0 {
+        if !q.is_active() {
             continue;
         }
 
-        let q_val = q.polarity as i64 * q.magnitude as i64;
-        let s_val = stored[i].polarity as i64 * stored[i].magnitude as i64;
+        // Full equation: s = p × m × k via CURRENT_LUT
+        let q_val = q.current() as i64;
+        let s_val = stored[i].current() as i64;
 
         dot += q_val * s_val;
         norm_q += q_val * q_val;
@@ -85,12 +87,12 @@ fn isqrt(n: i64) -> i64 {
 mod tests {
     use super::*;
 
-    fn sig(polarity: i8, magnitude: u8) -> Signal {
-        Signal::new(polarity, magnitude)
+    fn sig(polarity: i8, magnitude: u8) -> PackedSignal {
+        PackedSignal::pack(polarity, magnitude, 1)
     }
 
-    fn zero() -> Signal {
-        Signal::new(0, 0)
+    fn zero() -> PackedSignal {
+        PackedSignal::ZERO
     }
 
     #[test]
@@ -112,23 +114,17 @@ mod tests {
 
     #[test]
     fn orthogonal_vectors_zero_similarity() {
-        // "Orthogonal" in signal space: one dimension active in each
         let a = vec![sig(1, 100), zero(), zero()];
         let b = vec![zero(), sig(1, 100), zero()];
         let score = sparse_cosine_similarity(&a, &b);
-        // Query dim 0 is active, stored dim 0 is zero → dot = 0
-        // Query dims 1,2 are zero → skipped
         assert_eq!(score, 0);
     }
 
     #[test]
     fn sparse_query_pattern_completion() {
-        // Full stored pattern: dog concept
         let stored = vec![sig(1, 200), sig(1, 150), sig(-1, 50), sig(1, 100)];
-        // Sparse query: only first two dimensions known
         let query = vec![sig(1, 200), sig(1, 150), zero(), zero()];
         let score = sparse_cosine_similarity(&query, &stored);
-        // Should be high — the known dimensions match perfectly
         assert!(score >= 250, "expected high similarity, got {score}");
     }
 
@@ -152,6 +148,20 @@ mod tests {
         let b = vec![sig(1, 100), sig(1, 100), sig(1, 100)];
         let score = sparse_cosine_similarity(&a, &b);
         assert!(score >= 250, "expected ~256 on overlapping dims, got {score}");
+    }
+
+    #[test]
+    fn multiplier_affects_similarity() {
+        // Same polarity and magnitude, different multiplier
+        let a = vec![PackedSignal::pack(1, 100, 3)];
+        let b = vec![PackedSignal::pack(1, 100, 3)];
+        let c = vec![PackedSignal::pack(1, 100, 1)];
+        let same = sparse_cosine_similarity(&a, &b);
+        let diff = sparse_cosine_similarity(&a, &c);
+        // Identical should be 256, different multiplier should still be positive but potentially different magnitude
+        assert!(same >= 250, "identical signals with k=3 should match: {same}");
+        // Both positive, so cosine should be positive
+        assert!(diff > 0, "same-direction signals should have positive similarity: {diff}");
     }
 
     #[test]

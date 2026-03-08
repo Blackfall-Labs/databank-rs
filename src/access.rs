@@ -45,7 +45,7 @@ impl BankAccess for ClusterBankAccess<'_> {
     fn query(&self, bank_slot: u8, query: &[i32], top_k: usize) -> Option<Vec<(i64, i32)>> {
         let bank_id = self.slot_map.resolve(bank_slot)?;
         let bank = self.cluster.get(bank_id)?;
-        let signals = bridge::i32_to_signals(query);
+        let signals = bridge::i32_to_packed_signals(query);
         let results = bank.query_sparse(&signals, top_k);
         Some(
             results
@@ -60,7 +60,7 @@ impl BankAccess for ClusterBankAccess<'_> {
         let bank = self.cluster.get(bank_id)?;
         let entry_id = bridge::i32_pair_to_entry_id(entry_id_high, entry_id_low);
         let entry = bank.get(entry_id)?;
-        Some(bridge::signals_to_i32(&entry.vector))
+        Some(bridge::packed_signals_to_i32(&entry.vector))
     }
 
     fn count(&self, bank_slot: u8) -> Option<i32> {
@@ -72,7 +72,7 @@ impl BankAccess for ClusterBankAccess<'_> {
     fn write(&mut self, bank_slot: u8, vector: &[i32]) -> Option<(i32, i32)> {
         let bank_id = self.slot_map.resolve(bank_slot)?;
         let bank = self.cluster.get_mut(bank_id)?;
-        let signals = bridge::i32_to_signals(vector);
+        let signals = bridge::i32_to_packed_signals(vector);
         let entry_id = bank.insert(signals, self.temperature, self.tick).ok()?;
         Some(bridge::entry_id_to_i32_pair(entry_id))
     }

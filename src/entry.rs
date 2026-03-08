@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::error::{DataBankError, Result};
 use crate::types::{BankId, BankRef, Edge, EntryId, Temperature};
@@ -14,7 +14,8 @@ pub struct BankEntry {
     /// Unique entry identifier (temporally sortable).
     pub id: EntryId,
     /// The representational signal vector. Fixed width per bank.
-    pub vector: Vec<Signal>,
+    /// Each PackedSignal encodes the full s = p × m × k equation in 1 byte.
+    pub vector: Vec<PackedSignal>,
     /// Typed, weighted edges to other entries (cross-bank allowed).
     pub edges: Vec<Edge>,
     /// Which bank originally created this entry.
@@ -41,7 +42,7 @@ impl BankEntry {
     /// The checksum is computed automatically from the vector data.
     pub fn new(
         id: EntryId,
-        vector: Vec<Signal>,
+        vector: Vec<PackedSignal>,
         origin: BankId,
         temperature: Temperature,
         tick: u64,
@@ -162,17 +163,11 @@ impl BankEntry {
     }
 }
 
-/// Compute CRC32 checksum over raw signal bytes (polarity + magnitude).
-fn compute_vector_checksum(vector: &[Signal]) -> u32 {
-    crc32fast_compute(vector)
-}
-
-/// CRC32 over signal vector bytes: [polarity, magnitude, polarity, magnitude, ...]
-fn crc32fast_compute(signals: &[Signal]) -> u32 {
+/// Compute CRC32 checksum over raw PackedSignal bytes.
+fn compute_vector_checksum(vector: &[PackedSignal]) -> u32 {
     let mut crc: u32 = 0xFFFF_FFFF;
-    for s in signals {
-        crc = crc32_update(crc, s.polarity as u8);
-        crc = crc32_update(crc, s.magnitude);
+    for s in vector {
+        crc = crc32_update(crc, s.as_u8());
     }
     crc ^ 0xFFFF_FFFF
 }
@@ -196,8 +191,8 @@ mod tests {
     use crate::types::BankId;
 
     fn make_entry(width: usize, tick: u64) -> BankEntry {
-        let vector: Vec<Signal> = (0..width)
-            .map(|i| Signal::new(1, (i % 255) as u8 + 1))
+        let vector: Vec<PackedSignal> = (0..width)
+            .map(|i| PackedSignal::pack(1, (i % 255) as u8 + 1, 1))
             .collect();
         let bank_id = BankId::from_raw(1);
         BankEntry::new(EntryId::new(0), vector, bank_id, Temperature::Hot, tick)
@@ -357,7 +352,7 @@ mod tests {
         let mut entry = make_entry(32, 0);
         assert!(entry.validate());
         // Corrupt one signal
-        entry.vector[0] = Signal::new(-1, 255);
+        entry.vector[0] = PackedSignal::pack(-1, 255, 1);
         assert!(!entry.validate());
     }
 }

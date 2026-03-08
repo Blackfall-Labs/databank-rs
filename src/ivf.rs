@@ -3,12 +3,9 @@
 //! Partitions the vector space into k clusters. Each entry is assigned to
 //! its nearest centroid. Queries search only the `nprobe` nearest clusters
 //! instead of all entries, giving ~k/nprobe speedup.
-//!
-//! For 0.2, centroids are initialized by random sampling from entries.
-//! Full k-means iterative refinement is deferred to 0.3.
 
 use std::collections::HashMap;
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::entry::BankEntry;
 use crate::index::VectorIndex;
@@ -18,7 +15,7 @@ use crate::types::EntryId;
 /// Inverted File Index — partitions vector space into clusters for
 /// sub-linear approximate nearest neighbor search.
 pub struct IvfIndex {
-    /// k centroids stored as signed i32 vectors (polarity * magnitude).
+    /// k centroids stored as signed i32 vectors (p × m × k via current()).
     centroids: Vec<Vec<i32>>,
     /// Per-centroid list of assigned entry IDs.
     assignments: Vec<Vec<EntryId>>,
@@ -43,29 +40,20 @@ impl IvfIndex {
     }
 
     /// Find the nearest centroid index for a given vector.
-    fn nearest_centroid(&self, vector: &[Signal]) -> usize {
+    fn nearest_centroid(&self, vector: &[PackedSignal]) -> usize {
         if self.centroids.is_empty() {
             return 0;
         }
-        let i32_vec = signals_to_i32_vec(vector);
-        let mut best_idx = 0;
-        let mut best_score = i64::MIN;
-        for (i, centroid) in self.centroids.iter().enumerate() {
-            let score = dot_i32(&i32_vec, centroid);
-            if score > best_score {
-                best_score = score;
-                best_idx = i;
-            }
-        }
-        best_idx
+        let i32_vec = packed_to_i32_vec(vector);
+        self.nearest_centroid_from_i32(&i32_vec)
     }
 
     /// Find the `nprobe` nearest centroid indices for a query.
-    fn nearest_centroids(&self, query: &[Signal]) -> Vec<usize> {
+    fn nearest_centroids(&self, query: &[PackedSignal]) -> Vec<usize> {
         if self.centroids.is_empty() {
             return Vec::new();
         }
-        let i32_vec = signals_to_i32_vec(query);
+        let i32_vec = packed_to_i32_vec(query);
         let mut scored: Vec<(usize, i64)> = self
             .centroids
             .iter()
@@ -96,7 +84,7 @@ impl IvfIndex {
         self.centroids = (0..k)
             .map(|i| {
                 let idx = (i * step).min(entry_list.len() - 1);
-                signals_to_i32_vec(&entry_list[idx].vector)
+                packed_to_i32_vec(&entry_list[idx].vector)
             })
             .collect();
 
@@ -118,15 +106,29 @@ impl IvfIndex {
             }
         }
     }
+
+    /// Internal: nearest centroid from pre-converted i32 vector.
+    fn nearest_centroid_from_i32(&self, i32_vec: &[i32]) -> usize {
+        let mut best_idx = 0;
+        let mut best_score = i64::MIN;
+        for (i, centroid) in self.centroids.iter().enumerate() {
+            let score = dot_i32(i32_vec, centroid);
+            if score > best_score {
+                best_score = score;
+                best_idx = i;
+            }
+        }
+        best_idx
+    }
 }
 
 impl VectorIndex for IvfIndex {
-    fn insert(&mut self, id: EntryId, vector: &[Signal]) {
+    fn insert(&mut self, id: EntryId, vector: &[PackedSignal]) {
         if self.centroids.is_empty() {
             // No centroids yet — can't assign. Will rebuild on next query.
             return;
         }
-        let ci = self.nearest_centroid_from_i32(&signals_to_i32_vec(vector));
+        let ci = self.nearest_centroid_from_i32(&packed_to_i32_vec(vector));
         if ci < self.assignments.len() {
             self.assignments[ci].push(id);
         }
@@ -140,7 +142,7 @@ impl VectorIndex for IvfIndex {
 
     fn query(
         &self,
-        query: &[Signal],
+        query: &[PackedSignal],
         entries: &HashMap<EntryId, BankEntry>,
         top_k: usize,
     ) -> Vec<QueryResult> {
@@ -207,7 +209,7 @@ impl IvfIndex {
         let width = self.centroids[0].len();
         let k = self.centroids.len();
         let entry_vecs: Vec<(EntryId, Vec<i32>)> = entries.iter()
-            .map(|(&id, e)| (id, signals_to_i32_vec(&e.vector)))
+            .map(|(&id, e)| (id, packed_to_i32_vec(&e.vector)))
             .collect();
 
         for _iter in 0..max_iterations {
@@ -251,31 +253,17 @@ impl IvfIndex {
         // Final assignment pass
         self.assign_all(entries);
     }
-
-    /// Internal: nearest centroid from pre-converted i32 vector.
-    fn nearest_centroid_from_i32(&self, i32_vec: &[i32]) -> usize {
-        let mut best_idx = 0;
-        let mut best_score = i64::MIN;
-        for (i, centroid) in self.centroids.iter().enumerate() {
-            let score = dot_i32(i32_vec, centroid);
-            if score > best_score {
-                best_score = score;
-                best_idx = i;
-            }
-        }
-        best_idx
-    }
 }
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-/// Convert Signal vector to i32 vector (polarity * magnitude).
-fn signals_to_i32_vec(signals: &[Signal]) -> Vec<i32> {
+/// Convert PackedSignal vector to i32 vector using full p × m × k equation.
+fn packed_to_i32_vec(signals: &[PackedSignal]) -> Vec<i32> {
     signals
         .iter()
-        .map(|s| s.polarity as i32 * s.magnitude as i32)
+        .map(|s| s.current())
         .collect()
 }
 
@@ -291,7 +279,7 @@ fn dot_i32(a: &[i32], b: &[i32]) -> i64 {
 
 /// Brute-force fallback when IVF has no centroids.
 fn brute_force_query(
-    query: &[Signal],
+    query: &[PackedSignal],
     entries: &HashMap<EntryId, BankEntry>,
     top_k: usize,
 ) -> Vec<QueryResult> {
@@ -318,7 +306,7 @@ pub enum IndexType {
 
 impl Default for IndexType {
     fn default() -> Self {
-        IndexType::BruteForce
+        IndexType::Ivf { k: 64, nprobe: 8 }
     }
 }
 
@@ -327,11 +315,11 @@ mod tests {
     use super::*;
     use crate::types::{BankId, Temperature};
 
-    fn sig(polarity: i8, magnitude: u8) -> Signal {
-        Signal::new(polarity, magnitude)
+    fn sig(polarity: i8, magnitude: u8) -> PackedSignal {
+        PackedSignal::pack(polarity, magnitude, 1)
     }
 
-    fn make_entry(id: u64, vector: Vec<Signal>) -> (EntryId, BankEntry) {
+    fn make_entry(id: u64, vector: Vec<PackedSignal>) -> (EntryId, BankEntry) {
         let eid = EntryId::from_raw(id);
         let entry = BankEntry::new(eid, vector, BankId::from_raw(1), Temperature::Hot, 0);
         (eid, entry)
@@ -407,7 +395,6 @@ mod tests {
 
     #[test]
     fn ivf_accuracy_vs_brute_force() {
-        // Generate entries and compare IVF results vs brute force
         let mut entries = HashMap::new();
         for i in 0u64..32 {
             let v = vec![
@@ -517,5 +504,11 @@ mod tests {
         assert_eq!(dot_i32(&[1, 2, 3], &[4, 5, 6]), 32);
         assert_eq!(dot_i32(&[100, -200], &[-100, 200]), -50000);
         assert_eq!(dot_i32(&[], &[]), 0);
+    }
+
+    #[test]
+    fn default_index_type_is_ivf() {
+        let default = IndexType::default();
+        assert!(matches!(default, IndexType::Ivf { k: 64, nprobe: 8 }));
     }
 }

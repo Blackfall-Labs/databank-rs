@@ -1,9 +1,9 @@
-//! Binary `.bank` v1 format codec.
+//! Binary `.bank` v2 format codec.
 //!
 //! Header (32 bytes):
 //! ```text
 //! [0..4]   Magic: b"BANK"
-//! [4..6]   Version: u16 LE = 1
+//! [4..6]   Version: u16 LE = 2
 //! [6..8]   Flags: u16 LE = 0
 //! [8..12]  Total size: u32 LE (patched after encode)
 //! [12..20] Checksum: u64 LE xxhash64 (patched after encode)
@@ -12,12 +12,14 @@
 //! [30..32] Entry count: u16 LE
 //! ```
 //!
-//! Followed by: bank name, config, entries (with edges), and state counters.
+//! v2 stores each signal as 1 byte (PackedSignal raw u8) — lossless.
+//! v1 stored 2 bytes per signal (polarity + magnitude, no multiplier).
+//! v1 decode is retained for backward compatibility.
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::bank::DataBank;
 use crate::entry::BankEntry;
@@ -25,14 +27,14 @@ use crate::error::{DataBankError, Result};
 use crate::types::*;
 
 const MAGIC: &[u8; 4] = b"BANK";
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 const HEADER_SIZE: usize = 32;
 
 // ---------------------------------------------------------------------------
-// Encode
+// Encode (v2)
 // ---------------------------------------------------------------------------
 
-/// Encode a DataBank into the binary `.bank` v1 format.
+/// Encode a DataBank into the binary `.bank` v2 format.
 pub fn encode(bank: &DataBank) -> Result<Vec<u8>> {
     let mut buf = Vec::with_capacity(4096);
 
@@ -80,11 +82,10 @@ fn encode_entry(buf: &mut Vec<u8>, entry: &BankEntry) {
     // EntryId
     write_u64(buf, entry.id.0);
 
-    // Vector
+    // Vector — v2: 1 byte per PackedSignal (raw u8)
     write_u16(buf, entry.vector.len() as u16);
     for s in &entry.vector {
-        buf.push(s.polarity as u8);
-        buf.push(s.magnitude);
+        buf.push(s.as_u8());
     }
 
     // Edges
@@ -128,7 +129,8 @@ fn encode_entry(buf: &mut Vec<u8>, entry: &BankEntry) {
 // Decode
 // ---------------------------------------------------------------------------
 
-/// Decode a binary `.bank` v1 buffer into a DataBank.
+/// Decode a binary `.bank` buffer into a DataBank.
+/// Supports both v1 (2 bytes/signal) and v2 (1 byte/signal) formats.
 pub fn decode(data: &[u8]) -> Result<DataBank> {
     if data.len() < HEADER_SIZE {
         return Err(DataBankError::Codec("data too short for header".into()));
@@ -144,7 +146,7 @@ pub fn decode(data: &[u8]) -> Result<DataBank> {
 
     let mut pos = 4;
     let version = read_u16(data, &mut pos);
-    if version != VERSION {
+    if version != 1 && version != 2 {
         return Err(DataBankError::Codec(format!(
             "unsupported version: {version}"
         )));
@@ -189,6 +191,7 @@ pub fn decode(data: &[u8]) -> Result<DataBank> {
         max_entries,
         vector_width: cfg_vector_width,
         max_edges_per_entry,
+        ..BankConfig::default()
     };
 
     // -- Entries --
@@ -196,7 +199,7 @@ pub fn decode(data: &[u8]) -> Result<DataBank> {
     let mut reverse_edges: HashMap<EntryId, Vec<(BankRef, EdgeType)>> = HashMap::new();
 
     for _ in 0..entry_count {
-        let entry = decode_entry(data, &mut pos, vector_width, bank_id)?;
+        let entry = decode_entry(data, &mut pos, vector_width, bank_id, version)?;
 
         // Rebuild reverse edges
         for edge in &entry.edges {
@@ -236,7 +239,8 @@ fn decode_entry(
     data: &[u8],
     pos: &mut usize,
     expected_width: u16,
-    bank_id: BankId,
+    _bank_id: BankId,
+    version: u16,
 ) -> Result<BankEntry> {
     let entry_id = EntryId(read_u64(data, pos));
 
@@ -247,12 +251,24 @@ fn decode_entry(
             "entry vector width {vec_len} != bank width {expected_width}"
         )));
     }
-    let mut vector = Vec::with_capacity(vec_len);
-    for _ in 0..vec_len {
-        let polarity = read_u8(data, pos) as i8;
-        let magnitude = read_u8(data, pos);
-        vector.push(Signal::new(polarity, magnitude));
-    }
+
+    let vector = if version == 1 {
+        // v1: 2 bytes per signal (polarity i8 + magnitude u8), k=1 implied
+        let mut v = Vec::with_capacity(vec_len);
+        for _ in 0..vec_len {
+            let polarity = read_u8(data, pos) as i8;
+            let magnitude = read_u8(data, pos);
+            v.push(PackedSignal::pack(polarity, magnitude, 1));
+        }
+        v
+    } else {
+        // v2: 1 byte per signal (raw PackedSignal u8) — lossless
+        let mut v = Vec::with_capacity(vec_len);
+        for _ in 0..vec_len {
+            v.push(PackedSignal::from_raw(read_u8(data, pos)));
+        }
+        v
+    };
 
     // Edges
     let edge_count = read_u16(data, pos) as usize;
@@ -279,7 +295,6 @@ fn decode_entry(
 
     // Origin
     let origin = BankId(read_u64(data, pos));
-    let _ = bank_id; // origin comes from the entry itself
 
     // Temperature
     let temp_raw = read_u8(data, pos);
@@ -436,18 +451,18 @@ mod tests {
 
         // Insert entries
         let v1 = vec![
-            Signal::new(1, 100),
-            Signal::new(-1, 50),
-            Signal::new(0, 0),
-            Signal::new(1, 200),
+            PackedSignal::pack(1, 100, 1),
+            PackedSignal::pack(-1, 50, 1),
+            PackedSignal::ZERO,
+            PackedSignal::pack(1, 200, 1),
         ];
         let id1 = bank.insert(v1, Temperature::Hot, 10).unwrap();
 
         let v2 = vec![
-            Signal::new(-1, 80),
-            Signal::new(1, 160),
-            Signal::new(1, 30),
-            Signal::new(-1, 90),
+            PackedSignal::pack(-1, 80, 1),
+            PackedSignal::pack(1, 160, 1),
+            PackedSignal::pack(1, 30, 1),
+            PackedSignal::pack(-1, 90, 1),
         ];
         let id2 = bank.insert(v2, Temperature::Warm, 20).unwrap();
 
@@ -494,6 +509,14 @@ mod tests {
             assert_eq!(dec_entry.debug_tag, orig_entry.debug_tag);
             assert_eq!(dec_entry.checksum, orig_entry.checksum);
         }
+    }
+
+    #[test]
+    fn v2_uses_one_byte_per_signal() {
+        let original = make_bank_with_entries();
+        let encoded = encode(&original).unwrap();
+        // Verify version is 2
+        assert_eq!(u16::from_le_bytes([encoded[4], encoded[5]]), 2);
     }
 
     #[test]
@@ -549,5 +572,31 @@ mod tests {
         assert_eq!(loaded.id, bank.id);
         assert_eq!(loaded.name, bank.name);
         assert_eq!(loaded.len(), bank.len());
+    }
+
+    #[test]
+    fn packed_signal_lossless_round_trip() {
+        // Verify that PackedSignal survives encode→decode without loss
+        let id = BankId::from_raw(99);
+        let config = BankConfig {
+            vector_width: 3,
+            ..BankConfig::default()
+        };
+        let mut bank = DataBank::new(id, "lossless.test".into(), config);
+        let v = vec![
+            PackedSignal::pack(1, 200, 3),
+            PackedSignal::pack(-1, 128, 2),
+            PackedSignal::pack(1, 64, 1),
+        ];
+        let eid = bank.insert(v.clone(), Temperature::Hot, 0).unwrap();
+
+        let encoded = encode(&bank).unwrap();
+        let decoded = decode(&encoded).unwrap();
+        let entry = decoded.get(eid).unwrap();
+
+        // Raw bytes must be identical — lossless
+        for (orig, loaded) in v.iter().zip(entry.vector.iter()) {
+            assert_eq!(orig.as_u8(), loaded.as_u8(), "PackedSignal not lossless");
+        }
     }
 }

@@ -18,7 +18,7 @@ use crate::cluster::BankCluster;
 use crate::types::{BankId, BankRef, Edge, EdgeType, EntryId, Temperature};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 /// A single journal entry: one mutation to a bank.
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub enum JournalEntry {
     Insert {
         bank_id: BankId,
         entry_id: EntryId,
-        vector: Vec<Signal>,
+        vector: Vec<PackedSignal>,
         temperature: Temperature,
         tick: u64,
     },
@@ -281,8 +281,7 @@ fn encode_entry(entry: &JournalEntry) -> Vec<u8> {
             buf.push(temperature_to_u8(*temperature));
             buf.extend_from_slice(&(vector.len() as u16).to_le_bytes());
             for s in vector {
-                buf.push(s.polarity as u8);
-                buf.push(s.magnitude);
+                buf.push(s.as_u8());
             }
         }
         JournalEntry::Remove { bank_id, entry_id } => {
@@ -383,7 +382,7 @@ fn decode_entry(data: &[u8]) -> Option<(JournalEntry, usize)> {
 }
 
 fn decode_insert(data: &[u8]) -> Option<(JournalEntry, usize)> {
-    // tag(1) + bank_id(8) + entry_id(8) + tick(8) + temp(1) + vec_len(2) + signals(N*2) + crc(4)
+    // tag(1) + bank_id(8) + entry_id(8) + tick(8) + temp(1) + vec_len(2) + signals(N*1) + crc(4)
     let min_len = 1 + 8 + 8 + 8 + 1 + 2 + 4;
     if data.len() < min_len {
         return None;
@@ -394,7 +393,7 @@ fn decode_insert(data: &[u8]) -> Option<(JournalEntry, usize)> {
     let temperature = u8_to_temperature(data[25])?;
     let vec_len = u16::from_le_bytes(data[26..28].try_into().ok()?) as usize;
 
-    let body_len = 28 + vec_len * 2;
+    let body_len = 28 + vec_len; // 1 byte per PackedSignal
     let total = body_len + 4; // + crc
     if data.len() < total {
         return None;
@@ -409,13 +408,7 @@ fn decode_insert(data: &[u8]) -> Option<(JournalEntry, usize)> {
 
     let mut vector = Vec::with_capacity(vec_len);
     for i in 0..vec_len {
-        let offset = 28 + i * 2;
-        let polarity = data[offset] as i8;
-        let magnitude = data[offset + 1];
-        vector.push(Signal {
-            polarity,
-            magnitude,
-        });
+        vector.push(PackedSignal::from_raw(data[28 + i]));
     }
 
     Some((
@@ -634,11 +627,8 @@ fn crc32(data: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    fn make_signal(pol: i8, mag: u8) -> Signal {
-        Signal {
-            polarity: pol,
-            magnitude: mag,
-        }
+    fn make_signal(pol: i8, mag: u8) -> PackedSignal {
+        PackedSignal::pack(pol, mag, 1)
     }
 
     #[test]
@@ -664,8 +654,8 @@ mod tests {
                 assert_eq!(bank_id, BankId(12345));
                 assert_eq!(entry_id, EntryId(67890));
                 assert_eq!(vector.len(), 2);
-                assert_eq!(vector[0].polarity, 1);
-                assert_eq!(vector[0].magnitude, 100);
+                assert!(vector[0].is_positive());
+                assert!(vector[1].is_negative());
                 assert_eq!(temperature, Temperature::Warm);
                 assert_eq!(tick, 42);
             }

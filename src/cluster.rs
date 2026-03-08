@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
 use crate::bank::DataBank;
 use crate::codec;
@@ -179,7 +179,7 @@ impl BankCluster {
     /// Returns top_k results globally with z-score normalization.
     pub fn query_all(
         &self,
-        query_per_bank: &HashMap<BankId, Vec<Signal>>,
+        query_per_bank: &HashMap<BankId, Vec<PackedSignal>>,
         top_k: usize,
     ) -> Vec<ClusterQueryResult> {
         let mut all_results: Vec<ClusterQueryResult> = Vec::new();
@@ -227,7 +227,7 @@ impl BankCluster {
     pub fn query_by_prefix(
         &self,
         prefix: &str,
-        query: &[Signal],
+        query: &[PackedSignal],
         top_k: usize,
     ) -> Vec<ClusterQueryResult> {
         let mut query_map = HashMap::new();
@@ -416,7 +416,7 @@ impl Default for BankCluster {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ternary_signal::Signal;
+    use ternary_signal::PackedSignal;
 
     fn make_config(width: u16) -> BankConfig {
         BankConfig {
@@ -429,9 +429,9 @@ mod tests {
         }
     }
 
-    fn make_vector(width: u16) -> Vec<Signal> {
+    fn make_vector(width: u16) -> Vec<PackedSignal> {
         (0..width)
-            .map(|i| Signal::new(1, (i % 255) as u8 + 1))
+            .map(|i| PackedSignal::pack(1, (i % 255) as u8 + 1, 1))
             .collect()
     }
 

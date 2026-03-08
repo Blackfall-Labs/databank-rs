@@ -80,7 +80,7 @@ impl BankFulfiller {
             None => return FulfillResult::Error(format!("Bank {:?} not found", bank_id)),
         };
 
-        let query_signals = bridge::i32_to_signals(source_data);
+        let query_signals = bridge::i32_to_packed_signals(source_data);
         let results = bank.query_sparse(&query_signals, top_k as usize);
         let packed = bridge::query_results_to_i32(&results);
         let len = packed.len();
@@ -110,7 +110,7 @@ impl BankFulfiller {
             None => return FulfillResult::Error(format!("Bank {:?} not found", bank_id)),
         };
 
-        let vector = bridge::i32_to_signals(source_data);
+        let vector = bridge::i32_to_packed_signals(source_data);
         match bank.insert(vector, temperature, tick) {
             Ok(entry_id) => {
                 let (high, low) = bridge::entry_id_to_i32_pair(entry_id);
@@ -146,7 +146,7 @@ impl BankFulfiller {
         let entry_id = bridge::i32_pair_to_entry_id(source_data[0], source_data[1]);
         match bank.get(entry_id) {
             Some(entry) => {
-                let data = bridge::signals_to_i32(&entry.vector);
+                let data = bridge::packed_signals_to_i32(&entry.vector);
                 let len = data.len();
                 FulfillResult::WriteRegister {
                     register_index: 0,
@@ -438,13 +438,10 @@ impl BankFulfiller {
 mod tests {
     use super::*;
     use crate::types::BankConfig;
-    use ternary_signal::Signal;
+    use ternary_signal::PackedSignal;
 
-    fn make_signal(pol: i8, mag: u8) -> Signal {
-        Signal {
-            polarity: pol,
-            magnitude: mag,
-        }
+    fn make_packed(pol: i8, mag: u8, mul: u8) -> PackedSignal {
+        PackedSignal::pack(pol, mag, mul)
     }
 
     fn setup_cluster() -> (BankCluster, BankSlotMap, BankId) {
@@ -465,11 +462,11 @@ mod tests {
         let (mut cluster, slot_map, _) = setup_cluster();
 
         // Write an entry
-        let source = bridge::signals_to_i32(&[
-            make_signal(1, 100),
-            make_signal(-1, 50),
-            make_signal(0, 0),
-            make_signal(1, 200),
+        let source = bridge::packed_signals_to_i32(&[
+            make_packed(1, 100, 1),
+            make_packed(-1, 50, 1),
+            PackedSignal::ZERO,
+            make_packed(1, 200, 1),
         ]);
         let result = BankFulfiller::write(
             &mut cluster,
@@ -493,13 +490,13 @@ mod tests {
     fn test_write_load_roundtrip() {
         let (mut cluster, slot_map, _) = setup_cluster();
 
-        let signals = vec![
-            make_signal(1, 100),
-            make_signal(-1, 50),
-            make_signal(0, 0),
-            make_signal(1, 200),
+        let signals = [
+            make_packed(1, 100, 1),
+            make_packed(-1, 50, 1),
+            PackedSignal::ZERO,
+            make_packed(1, 200, 1),
         ];
-        let source = bridge::signals_to_i32(&signals);
+        let source = bridge::packed_signals_to_i32(&signals);
 
         // Write
         let write_result =
@@ -525,20 +522,20 @@ mod tests {
         let (mut cluster, slot_map, _) = setup_cluster();
 
         // Insert a known pattern
-        let pattern = bridge::signals_to_i32(&[
-            make_signal(1, 200),
-            make_signal(1, 200),
-            make_signal(1, 200),
-            make_signal(1, 200),
+        let pattern = bridge::packed_signals_to_i32(&[
+            make_packed(1, 200, 1),
+            make_packed(1, 200, 1),
+            make_packed(1, 200, 1),
+            make_packed(1, 200, 1),
         ]);
         BankFulfiller::write(&mut cluster, &slot_map, 0, &pattern, Temperature::Hot, 1);
 
         // Query with partial cue (same direction)
-        let query = bridge::signals_to_i32(&[
-            make_signal(1, 100),
-            make_signal(0, 0), // sparse: skip this
-            make_signal(1, 100),
-            make_signal(0, 0), // sparse: skip this
+        let query = bridge::packed_signals_to_i32(&[
+            make_packed(1, 100, 1),
+            PackedSignal::ZERO, // sparse: skip this
+            make_packed(1, 100, 1),
+            PackedSignal::ZERO, // sparse: skip this
         ]);
         let result = BankFulfiller::query(&cluster, &slot_map, 0, &query, 5);
         match result {
@@ -554,11 +551,11 @@ mod tests {
     fn test_touch_and_delete() {
         let (mut cluster, slot_map, _) = setup_cluster();
 
-        let source = bridge::signals_to_i32(&[
-            make_signal(1, 100),
-            make_signal(1, 100),
-            make_signal(1, 100),
-            make_signal(1, 100),
+        let source = bridge::packed_signals_to_i32(&[
+            make_packed(1, 100, 1),
+            make_packed(1, 100, 1),
+            make_packed(1, 100, 1),
+            make_packed(1, 100, 1),
         ]);
         let write_result =
             BankFulfiller::write(&mut cluster, &slot_map, 0, &source, Temperature::Hot, 1);
@@ -585,11 +582,11 @@ mod tests {
     #[test]
     fn test_promote_and_demote() {
         let (mut cluster, slot_map, _) = setup_cluster();
-        let source = bridge::signals_to_i32(&[
-            make_signal(1, 100),
-            make_signal(1, 100),
-            make_signal(1, 100),
-            make_signal(1, 100),
+        let source = bridge::packed_signals_to_i32(&[
+            make_packed(1, 100, 1),
+            make_packed(1, 100, 1),
+            make_packed(1, 100, 1),
+            make_packed(1, 100, 1),
         ]);
         let write_result =
             BankFulfiller::write(&mut cluster, &slot_map, 0, &source, Temperature::Hot, 1);
@@ -612,11 +609,11 @@ mod tests {
         let (mut cluster, slot_map, _) = setup_cluster();
         // Insert 3 entries
         for _ in 0..3 {
-            let source = bridge::signals_to_i32(&[
-                make_signal(1, 100),
-                make_signal(1, 100),
-                make_signal(1, 100),
-                make_signal(1, 100),
+            let source = bridge::packed_signals_to_i32(&[
+                make_packed(1, 100, 1),
+                make_packed(1, 100, 1),
+                make_packed(1, 100, 1),
+                make_packed(1, 100, 1),
             ]);
             BankFulfiller::write(&mut cluster, &slot_map, 0, &source, Temperature::Hot, 1);
         }

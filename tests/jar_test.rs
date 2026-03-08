@@ -6,50 +6,50 @@
 
 use databank_rs::*;
 use std::collections::HashMap;
-use ternary_signal::Signal;
+use ternary_signal::PackedSignal;
 
-fn sig(polarity: i8, magnitude: u8) -> Signal {
-    Signal::new(polarity, magnitude)
+fn ps(polarity: i8, magnitude: u8) -> PackedSignal {
+    PackedSignal::pack(polarity, magnitude, 1)
 }
 
-fn jar_semantic_vector() -> Vec<Signal> {
+fn jar_semantic_vector() -> Vec<PackedSignal> {
     // "jar" = container, glass, cylindrical, kitchen item
-    let mut v = vec![sig(0, 0); 64];
-    v[0] = sig(1, 200); // container concept
-    v[1] = sig(1, 180); // glass material
-    v[2] = sig(1, 150); // cylindrical shape
-    v[3] = sig(1, 120); // kitchen context
-    v[10] = sig(1, 100); // holdable
-    v[20] = sig(1, 90);  // transparent
+    let mut v = vec![PackedSignal::ZERO; 64];
+    v[0] = ps(1, 200); // container concept
+    v[1] = ps(1, 180); // glass material
+    v[2] = ps(1, 150); // cylindrical shape
+    v[3] = ps(1, 120); // kitchen context
+    v[10] = ps(1, 100); // holdable
+    v[20] = ps(1, 90);  // transparent
     v
 }
 
-fn jar_visual_vector() -> Vec<Signal> {
+fn jar_visual_vector() -> Vec<PackedSignal> {
     // Visual appearance: cylindrical, transparent, has lid
-    let mut v = vec![sig(0, 0); 128];
-    v[0] = sig(1, 200); // cylindrical
-    v[1] = sig(1, 180); // transparent
-    v[5] = sig(1, 150); // vertical orientation
-    v[10] = sig(1, 100); // has lid
-    v[30] = sig(1, 80);  // small/medium size
+    let mut v = vec![PackedSignal::ZERO; 128];
+    v[0] = ps(1, 200); // cylindrical
+    v[1] = ps(1, 180); // transparent
+    v[5] = ps(1, 150); // vertical orientation
+    v[10] = ps(1, 100); // has lid
+    v[30] = ps(1, 80);  // small/medium size
     v
 }
 
-fn jar_spatial_vector() -> Vec<Signal> {
+fn jar_spatial_vector() -> Vec<PackedSignal> {
     // Spatial properties: upright, holds things, shelf placement
-    let mut v = vec![sig(0, 0); 32];
-    v[0] = sig(1, 200); // upright
-    v[1] = sig(1, 180); // containment capacity
-    v[5] = sig(1, 120); // shelf-level position
+    let mut v = vec![PackedSignal::ZERO; 32];
+    v[0] = ps(1, 200); // upright
+    v[1] = ps(1, 180); // containment capacity
+    v[5] = ps(1, 120); // shelf-level position
     v
 }
 
-fn jar_expression_vector() -> Vec<Signal> {
+fn jar_expression_vector() -> Vec<PackedSignal> {
     // Usage context: kitchen, container, storage
-    let mut v = vec![sig(0, 0); 64];
-    v[0] = sig(1, 200); // kitchen
-    v[1] = sig(1, 180); // storage
-    v[2] = sig(1, 150); // food-related
+    let mut v = vec![PackedSignal::ZERO; 64];
+    v[0] = ps(1, 200); // kitchen
+    v[1] = ps(1, 180); // storage
+    v[2] = ps(1, 150); // food-related
     v
 }
 
@@ -139,16 +139,16 @@ fn jar_distributed_concept_full_lifecycle() {
     let loaded_semantic = loaded.get(id_semantic).unwrap();
     assert_eq!(loaded_semantic.len(), 1);
     let entry = loaded_semantic.get(eid_semantic).unwrap();
-    assert_eq!(entry.vector[0], sig(1, 200)); // container concept preserved
+    assert_eq!(entry.vector[0], ps(1, 200)); // container concept preserved
 
     // =========================================================================
     // Phase 5: Recall via sparse query
     // =========================================================================
 
     // Partial cue: "container" + "glass" → should recall "jar"
-    let mut partial_cue = vec![sig(0, 0); 64];
-    partial_cue[0] = sig(1, 200); // container
-    partial_cue[1] = sig(1, 180); // glass
+    let mut partial_cue = vec![PackedSignal::ZERO; 64];
+    partial_cue[0] = ps(1, 200); // container
+    partial_cue[1] = ps(1, 180); // glass
     let results = loaded_semantic.query_sparse(&partial_cue, 1);
     assert_eq!(results.len(), 1);
     assert_eq!(results[0].entry_id, eid_semantic);
