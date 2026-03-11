@@ -19,8 +19,8 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
 log = "0.4"
-ternsig = { path = "../ternsig", optional = true }
+ternsig = { version = "2.0", optional = true }
 
 [dev-dependencies]
 tempfile = "3.0"
-ternsig = { path = "../ternsig" }
+ternsig = "2.0"
