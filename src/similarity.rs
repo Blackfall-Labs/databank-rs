@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use ternary_signal::PackedSignal;
+use ternary_signal::Signal;
 
 use crate::types::EntryId;
 
@@ -7,22 +7,22 @@ use crate::types::EntryId;
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct QueryResult {
     pub entry_id: EntryId,
-    /// Similarity score scaled ×256. Range: [-256, 256].
+    /// Similarity score scaled x256. Range: [-256, 256].
     /// 256 = identical, 0 = orthogonal, -256 = opposite.
     pub score: i32,
 }
 
 /// Sparse cosine similarity using only integer arithmetic.
 ///
-/// Uses the full ternary equation s = p × m × k via `PackedSignal::current()`.
-/// Only non-zero query signals participate — this IS pattern completion.
+/// Uses the full ternary equation s = p x m x k via `Signal::current()`.
+/// Only non-zero query signals participate -- this IS pattern completion.
 /// A partial cue with zeros in unknown dimensions matches against the
 /// full stored vector only on the dimensions the cue specifies.
 ///
-/// Returns a score scaled ×256 (i32). Returns 0 for zero-norm inputs.
+/// Returns a score scaled x256 (i32). Returns 0 for zero-norm inputs.
 ///
 /// Compliant with ASTRO_004: no floating point. Integer-only arithmetic.
-pub fn sparse_cosine_similarity(query: &[PackedSignal], stored: &[PackedSignal]) -> i32 {
+pub fn sparse_cosine_similarity(query: &[Signal], stored: &[Signal]) -> i32 {
     let len = query.len().min(stored.len());
 
     let mut dot: i64 = 0;
@@ -32,11 +32,11 @@ pub fn sparse_cosine_similarity(query: &[PackedSignal], stored: &[PackedSignal])
     for i in 0..len {
         let q = query[i];
         // Skip inactive query dimensions (sparse: zeros don't participate)
-        if !q.is_active() {
+        if q.current() == 0 {
             continue;
         }
 
-        // Full equation: s = p × m × k via CURRENT_LUT
+        // Full equation: s = p x m x k via current()
         let q_val = q.current() as i64;
         let s_val = stored[i].current() as i64;
 
@@ -87,12 +87,12 @@ fn isqrt(n: i64) -> i64 {
 mod tests {
     use super::*;
 
-    fn sig(polarity: i8, magnitude: u8) -> PackedSignal {
-        PackedSignal::pack(polarity, magnitude, 1)
+    fn sig(polarity: i8, magnitude: u8) -> Signal {
+        Signal::new_raw(polarity, magnitude, 1)
     }
 
-    fn zero() -> PackedSignal {
-        PackedSignal::ZERO
+    fn zero() -> Signal {
+        Signal::ZERO
     }
 
     #[test]
@@ -153,9 +153,9 @@ mod tests {
     #[test]
     fn multiplier_affects_similarity() {
         // Same polarity and magnitude, different multiplier
-        let a = vec![PackedSignal::pack(1, 100, 3)];
-        let b = vec![PackedSignal::pack(1, 100, 3)];
-        let c = vec![PackedSignal::pack(1, 100, 1)];
+        let a = vec![Signal::new_raw(1, 100, 3)];
+        let b = vec![Signal::new_raw(1, 100, 3)];
+        let c = vec![Signal::new_raw(1, 100, 1)];
         let same = sparse_cosine_similarity(&a, &b);
         let diff = sparse_cosine_similarity(&a, &c);
         // Identical should be 256, different multiplier should still be positive but potentially different magnitude

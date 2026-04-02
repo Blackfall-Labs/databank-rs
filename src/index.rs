@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use ternary_signal::PackedSignal;
+use ternary_signal::Signal;
 
 use crate::entry::BankEntry;
 use crate::similarity::{sparse_cosine_similarity, QueryResult};
@@ -8,7 +8,7 @@ use crate::types::EntryId;
 /// Vector similarity index for fast recall.
 pub trait VectorIndex: Send + Sync {
     /// Record a new entry in the index.
-    fn insert(&mut self, id: EntryId, vector: &[PackedSignal]);
+    fn insert(&mut self, id: EntryId, vector: &[Signal]);
 
     /// Remove an entry from the index.
     fn remove(&mut self, id: EntryId);
@@ -16,7 +16,7 @@ pub trait VectorIndex: Send + Sync {
     /// Query the index for the top_k most similar entries to the query vector.
     fn query(
         &self,
-        query: &[PackedSignal],
+        query: &[Signal],
         entries: &HashMap<EntryId, BankEntry>,
         top_k: usize,
     ) -> Vec<QueryResult>;
@@ -34,7 +34,7 @@ pub trait VectorIndex: Send + Sync {
 pub struct BruteForceIndex;
 
 impl VectorIndex for BruteForceIndex {
-    fn insert(&mut self, _id: EntryId, _vector: &[PackedSignal]) {
+    fn insert(&mut self, _id: EntryId, _vector: &[Signal]) {
         // No-op: brute force scans the entry map directly.
     }
 
@@ -44,7 +44,7 @@ impl VectorIndex for BruteForceIndex {
 
     fn query(
         &self,
-        query: &[PackedSignal],
+        query: &[Signal],
         entries: &HashMap<EntryId, BankEntry>,
         top_k: usize,
     ) -> Vec<QueryResult> {
@@ -76,11 +76,11 @@ mod tests {
     use super::*;
     use crate::types::{BankId, Temperature};
 
-    fn sig(polarity: i8, magnitude: u8) -> PackedSignal {
-        PackedSignal::pack(polarity, magnitude, 1)
+    fn sig(polarity: i8, magnitude: u8) -> Signal {
+        Signal::new_raw(polarity, magnitude, 1)
     }
 
-    fn make_entry(id: u64, vector: Vec<PackedSignal>) -> (EntryId, BankEntry) {
+    fn make_entry(id: u64, vector: Vec<Signal>) -> (EntryId, BankEntry) {
         let eid = EntryId::from_raw(id);
         let entry = BankEntry::new(eid, vector, BankId::from_raw(1), Temperature::Hot, 0);
         (eid, entry)

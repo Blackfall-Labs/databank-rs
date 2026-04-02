@@ -18,7 +18,7 @@ use crate::cluster::BankCluster;
 use crate::types::{BankId, BankRef, Edge, EdgeType, EntryId, Temperature};
 use std::io::{self, BufWriter, Write};
 use std::path::Path;
-use ternary_signal::PackedSignal;
+use ternary_signal::Signal;
 
 /// A single journal entry: one mutation to a bank.
 #[derive(Debug, Clone)]
@@ -27,7 +27,7 @@ pub enum JournalEntry {
     Insert {
         bank_id: BankId,
         entry_id: EntryId,
-        vector: Vec<PackedSignal>,
+        vector: Vec<Signal>,
         temperature: Temperature,
         tick: u64,
     },
@@ -136,7 +136,7 @@ impl JournalReader {
                     cursor += consumed;
                 }
                 None => {
-                    // Truncated or corrupt entry — stop here
+                    // Truncated or corrupt entry -- stop here
                     log::warn!(
                         "Journal truncated at byte {}/{}, recovered {} entries",
                         cursor,
@@ -280,8 +280,11 @@ fn encode_entry(entry: &JournalEntry) -> Vec<u8> {
             buf.extend_from_slice(&(*tick).to_le_bytes());
             buf.push(temperature_to_u8(*temperature));
             buf.extend_from_slice(&(vector.len() as u16).to_le_bytes());
+            // v3 journal: 3 bytes per Signal (polarity, magnitude, multiplier)
             for s in vector {
-                buf.push(s.as_u8());
+                buf.push(s.polarity as u8);
+                buf.push(s.magnitude);
+                buf.push(s.multiplier);
             }
         }
         JournalEntry::Remove { bank_id, entry_id } => {
@@ -382,7 +385,7 @@ fn decode_entry(data: &[u8]) -> Option<(JournalEntry, usize)> {
 }
 
 fn decode_insert(data: &[u8]) -> Option<(JournalEntry, usize)> {
-    // tag(1) + bank_id(8) + entry_id(8) + tick(8) + temp(1) + vec_len(2) + signals(N*1) + crc(4)
+    // tag(1) + bank_id(8) + entry_id(8) + tick(8) + temp(1) + vec_len(2) + signals(N*3) + crc(4)
     let min_len = 1 + 8 + 8 + 8 + 1 + 2 + 4;
     if data.len() < min_len {
         return None;
@@ -393,7 +396,7 @@ fn decode_insert(data: &[u8]) -> Option<(JournalEntry, usize)> {
     let temperature = u8_to_temperature(data[25])?;
     let vec_len = u16::from_le_bytes(data[26..28].try_into().ok()?) as usize;
 
-    let body_len = 28 + vec_len; // 1 byte per PackedSignal
+    let body_len = 28 + vec_len * 3; // 3 bytes per Signal
     let total = body_len + 4; // + crc
     if data.len() < total {
         return None;
@@ -408,7 +411,11 @@ fn decode_insert(data: &[u8]) -> Option<(JournalEntry, usize)> {
 
     let mut vector = Vec::with_capacity(vec_len);
     for i in 0..vec_len {
-        vector.push(PackedSignal::from_raw(data[28 + i]));
+        let offset = 28 + i * 3;
+        let polarity = data[offset] as i8;
+        let magnitude = data[offset + 1];
+        let multiplier = data[offset + 2];
+        vector.push(Signal::new_raw(polarity, magnitude, multiplier));
     }
 
     Some((
@@ -627,8 +634,8 @@ fn crc32(data: &[u8]) -> u32 {
 mod tests {
     use super::*;
 
-    fn make_signal(pol: i8, mag: u8) -> PackedSignal {
-        PackedSignal::pack(pol, mag, 1)
+    fn make_signal(pol: i8, mag: u8) -> Signal {
+        Signal::new_raw(pol, mag, 1)
     }
 
     #[test]
@@ -654,8 +661,8 @@ mod tests {
                 assert_eq!(bank_id, BankId(12345));
                 assert_eq!(entry_id, EntryId(67890));
                 assert_eq!(vector.len(), 2);
-                assert!(vector[0].is_positive());
-                assert!(vector[1].is_negative());
+                assert_eq!(vector[0].polarity, 1);
+                assert_eq!(vector[1].polarity, -1);
                 assert_eq!(temperature, Temperature::Warm);
                 assert_eq!(tick, 42);
             }

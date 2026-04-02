@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use ternary_signal::PackedSignal;
+use ternary_signal::Signal;
 
 use crate::bank::DataBank;
 use crate::codec;
@@ -19,7 +19,7 @@ pub struct ClusterQueryResult {
     pub normalized_score: i32,
 }
 
-/// Multi-bank manager — the brain's distributed representational memory.
+/// Multi-bank manager -- the brain's distributed representational memory.
 ///
 /// Each region owns one or more banks in the cluster. The cluster provides
 /// cross-bank operations (linking, traversal) and batch persistence.
@@ -179,7 +179,7 @@ impl BankCluster {
     /// Returns top_k results globally with z-score normalization.
     pub fn query_all(
         &self,
-        query_per_bank: &HashMap<BankId, Vec<PackedSignal>>,
+        query_per_bank: &HashMap<BankId, Vec<Signal>>,
         top_k: usize,
     ) -> Vec<ClusterQueryResult> {
         let mut all_results: Vec<ClusterQueryResult> = Vec::new();
@@ -227,7 +227,7 @@ impl BankCluster {
     pub fn query_by_prefix(
         &self,
         prefix: &str,
-        query: &[PackedSignal],
+        query: &[Signal],
         top_k: usize,
     ) -> Vec<ClusterQueryResult> {
         let mut query_map = HashMap::new();
@@ -416,7 +416,7 @@ impl Default for BankCluster {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ternary_signal::PackedSignal;
+    use ternary_signal::Signal;
 
     fn make_config(width: u16) -> BankConfig {
         BankConfig {
@@ -429,9 +429,9 @@ mod tests {
         }
     }
 
-    fn make_vector(width: u16) -> Vec<PackedSignal> {
+    fn make_vector(width: u16) -> Vec<Signal> {
         (0..width)
-            .map(|i| PackedSignal::pack(1, (i % 255) as u8 + 1, 1))
+            .map(|i| Signal::new_raw(1, (i % 255) as u8 + 1, 1))
             .collect()
     }
 
@@ -512,7 +512,7 @@ mod tests {
         let bank_c = cluster.get_or_create(id_c, "c".into(), make_config(4));
         let ec = bank_c.insert(make_vector(4), Temperature::Hot, 0).unwrap();
 
-        // a → b → c (chain of RelatedTo edges)
+        // a -> b -> c (chain of RelatedTo edges)
         let ref_a = BankRef { bank: id_a, entry: ea };
         let ref_b = BankRef { bank: id_b, entry: eb };
         let ref_c = BankRef { bank: id_c, entry: ec };

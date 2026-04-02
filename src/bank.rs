@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use ternary_signal::PackedSignal;
+use ternary_signal::Signal;
 
 use crate::entry::BankEntry;
 use crate::error::{DataBankError, Result};
@@ -8,11 +8,11 @@ use crate::ivf::{IndexType, IvfIndex};
 use crate::similarity::QueryResult;
 use crate::types::{BankConfig, BankId, BankRef, Edge, EdgeType, EntryId, Temperature};
 
-/// A single databank — one region's representational memory.
+/// A single databank -- one region's representational memory.
 ///
 /// Each brain region owns one or more DataBanks, each storing signal-vector
-/// fragments of distributed concepts. Entries are fixed-width PackedSignal
-/// vectors (1 byte per dimension, full s = p × m × k equation) with typed
+/// fragments of distributed concepts. Entries are fixed-width Signal
+/// vectors (3 bytes per dimension, full s = p x m x k equation) with typed
 /// edges to entries in other banks.
 ///
 /// The bank manages its own persistence cadence (mutations + ticks since
@@ -68,7 +68,7 @@ impl DataBank {
     /// If the bank is at capacity, the lowest-scoring entry is evicted first.
     pub fn insert(
         &mut self,
-        vector: Vec<PackedSignal>,
+        vector: Vec<Signal>,
         temperature: Temperature,
         tick: u64,
     ) -> Result<EntryId> {
@@ -127,10 +127,10 @@ impl DataBank {
 
     /// Query the bank for entries most similar to the given vector.
     ///
-    /// Uses sparse cosine similarity with the full s = p × m × k equation.
+    /// Uses sparse cosine similarity with the full s = p x m x k equation.
     /// Only non-zero query dimensions participate. This IS pattern completion:
     /// a partial cue activates the full stored patterns that best match.
-    pub fn query_sparse(&self, query: &[PackedSignal], top_k: usize) -> Vec<QueryResult> {
+    pub fn query_sparse(&self, query: &[Signal], top_k: usize) -> Vec<QueryResult> {
         self.vector_index.query(query, &self.entries, top_k)
     }
 
@@ -404,9 +404,9 @@ mod tests {
         }
     }
 
-    fn make_vector(width: u16) -> Vec<PackedSignal> {
+    fn make_vector(width: u16) -> Vec<Signal> {
         (0..width)
-            .map(|i| PackedSignal::pack(1, (i % 255) as u8 + 1, 1))
+            .map(|i| Signal::new_raw(1, (i % 255) as u8 + 1, 1))
             .collect()
     }
 

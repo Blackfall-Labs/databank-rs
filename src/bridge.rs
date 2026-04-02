@@ -1,39 +1,15 @@
 //! Signal/Register Conversion Bridge
 //!
-//! Converts between PackedSignal vectors (databank-rs internal format) and
+//! Converts between Signal vectors (databank-rs internal format) and
 //! i32 register slices (TVMR firmware format). Also packs EntryId (u64)
 //! into i32 pairs for register transport.
 
 use crate::similarity::QueryResult;
 use crate::types::EntryId;
-use ternary_signal::{PackedSignal, Signal};
+use ternary_signal::Signal;
 
-/// Convert a PackedSignal vector to i32 register values.
-/// Each PackedSignal becomes its full current value: p × m × k.
-pub fn packed_signals_to_i32(signals: &[PackedSignal]) -> Vec<i32> {
-    signals
-        .iter()
-        .map(|s| s.current())
-        .collect()
-}
-
-/// Convert i32 register values back to PackedSignal vector.
-/// Uses Signal::from_current() to decompose each i32 into p/m/k,
-/// then quantizes to PackedSignal.
-pub fn i32_to_packed_signals(values: &[i32]) -> Vec<PackedSignal> {
-    values
-        .iter()
-        .map(|&v| PackedSignal::from_signal(&Signal::from_current(v)))
-        .collect()
-}
-
-// --- Backward-compatible aliases for Signal-based bridge ---
-// These are used by the ternsig access layer and fulfiller which
-// speak i32 registers. We keep the names for downstream compat.
-
-/// Convert a Signal vector to i32 register values (legacy bridge).
-/// Uses the full s = p × m × k equation.
-#[allow(deprecated)]
+/// Convert a Signal vector to i32 register values.
+/// Each Signal becomes its full current value: p x m x k.
 pub fn signals_to_i32(signals: &[Signal]) -> Vec<i32> {
     signals
         .iter()
@@ -41,8 +17,8 @@ pub fn signals_to_i32(signals: &[Signal]) -> Vec<i32> {
         .collect()
 }
 
-/// Convert i32 register values to Signal vector (legacy bridge).
-#[allow(deprecated)]
+/// Convert i32 register values back to Signal vector.
+/// Uses Signal::from_current() to decompose each i32 into p/m/k.
 pub fn i32_to_signals(values: &[i32]) -> Vec<Signal> {
     values
         .iter()
@@ -103,24 +79,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_packed_signal_to_i32_roundtrip() {
+    fn test_signal_to_i32_roundtrip() {
         let signals = vec![
-            PackedSignal::pack(1, 200, 1),
-            PackedSignal::pack(-1, 128, 1),
-            PackedSignal::ZERO,
-            PackedSignal::pack(1, 1, 1),
+            Signal::new_raw(1, 200, 1),
+            Signal::new_raw(-1, 128, 1),
+            Signal::ZERO,
+            Signal::new_raw(1, 1, 1),
         ];
-        let i32s = packed_signals_to_i32(&signals);
+        let i32s = signals_to_i32(&signals);
         // Verify positive values are positive, negative are negative
         assert!(i32s[0] > 0);
         assert!(i32s[1] < 0);
         assert_eq!(i32s[2], 0);
         assert!(i32s[3] > 0);
 
-        // Round-trip through i32 → PackedSignal should preserve direction
-        let back = i32_to_packed_signals(&i32s);
+        // Round-trip through i32 -> Signal should preserve direction
+        let back = i32_to_signals(&i32s);
         for (orig, restored) in signals.iter().zip(back.iter()) {
-            assert_eq!(orig.polarity(), restored.polarity(), "polarity mismatch");
+            assert_eq!(orig.polarity.signum(), restored.polarity.signum(), "polarity mismatch");
         }
     }
 

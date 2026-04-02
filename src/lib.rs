@@ -24,8 +24,8 @@ pub mod types;
 pub use access::ClusterBankAccess;
 pub use bank::DataBank;
 pub use bridge::{
-    entry_id_to_i32_pair, i32_pair_to_entry_id, i32_to_packed_signals, i32_to_signals,
-    packed_signals_to_i32, query_results_to_i32, signals_to_i32, traverse_results_to_i32,
+    entry_id_to_i32_pair, i32_pair_to_entry_id, i32_to_signals,
+    query_results_to_i32, signals_to_i32, traverse_results_to_i32,
 };
 pub use cluster::{BankCluster, ClusterQueryResult};
 pub use entry::BankEntry;
